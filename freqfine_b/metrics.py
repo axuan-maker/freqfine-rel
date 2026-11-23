@@ -56,6 +56,8 @@ def delong_test(y, s1, s2):
     s10 = float(np.sum((v10_1 - auc1) * (v10_2 - auc2)) / (n_pos - 1))
     s01 = float(np.sum((v01_1 - auc1) * (v01_2 - auc2)) / (n_neg - 1))
     var = s10 + s01
+    if var <= 0.0 or not np.isfinite(var):
+        return auc1, auc2, np.nan, np.nan
     z = (auc1 - auc2) / np.sqrt(var)
     p = 2.0 * (1.0 - norm.cdf(abs(z)))
     return auc1, auc2, float(z), float(p)

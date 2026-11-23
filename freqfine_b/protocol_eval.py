@@ -118,10 +118,10 @@ def h1a_fold(train_dir, val_dir, test_dir, cfg):
     scores_all = {}
     seed = int(cfg.seeds[0])
     for k in range(K):
-        sc = StandardScaler().fit(bp[tr, [k]])
+        sc = StandardScaler().fit(bp[tr][:, [k]])
         model = LogisticRegression(max_iter=1000, class_weight="balanced", random_state=seed)
-        model.fit(sc.transform(bp[tr, [k]]), y[tr])
-        scores = model.predict_proba(sc.transform(bp[te, [k]]))[:, _proba_col(model, cfg.pos_class)]
+        model.fit(sc.transform(bp[tr][:, [k]]), y[tr])
+        scores = model.predict_proba(sc.transform(bp[te][:, [k]]))[:, _proba_col(model, cfg.pos_class)]
         scores_all[k] = scores
         aucs[k] = auc(y[te], scores)
 
