@@ -1,6 +1,6 @@
 """cfc_extractor.py — 跨频带耦合特征提取（核心）。
 
-输入：data_loader.DataCatalog 给出的原始连续信号（音频 (T,) 或 EEG (13,T)）。
+输入：原始连续信号（音频 (T,) 或 EEG (13,T)），由 delivery_loader 提供。
 输出：每个试次的子带功率、上三角关系向量与 K×K 耦合矩阵，并按规范记录
 频带边界、顺序与采样率（写到 feature 侧的 meta.json，不混入原始信号维度）。
 
@@ -8,10 +8,7 @@
 """
 from __future__ import annotations
 
-import csv
-import json
-import os
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -29,7 +26,6 @@ __all__ = [
     "parse_coupling",
     "extract_sample_features",
     "discover_modules",
-    "process_directory",
 ]
 
 _EPS = np.finfo(np.float64).eps
@@ -359,119 +355,12 @@ def discover_modules(coupling_matrix: np.ndarray, n_modules: Optional[int] = Non
     ).fit_predict(A)
 
 
-# ---------------------------------------------------------------------- #
-# 按样本循环提取并落盘（内存控制 + 频带/采样率元数据）
-# ---------------------------------------------------------------------- #
-def process_directory(
-    processed_root: str,
-    modality: str,
-    out_dir: str,
-    cfg,
-    dataset: Optional[str] = None,
-) -> str:
-    from data_loader import DataCatalog
-
-    catalog = DataCatalog(processed_root)
-    feat_dir = os.path.join(out_dir, "features")
-    os.makedirs(feat_dir, exist_ok=True)
-
-    manifest_rows: List[Dict] = []
-    modules = None
-    n_seen = 0
-    matrix_acc = None
-
-    for sample in catalog.iter_samples(modality, dataset=dataset):
-        signal, meta, valid = sample.load_signal()
-        fs = meta.get("sr_hz")
-        if not fs or float(fs) <= 0:
-            raise ValueError("样本 %s 缺少有效 sr_hz（未知采样率不得 ready）" % sample.sample_id)
-        feats = extract_sample_features(signal, float(fs), cfg)
-
-        rel_path = os.path.join("features", sample.sample_id + ".npz")
-        np.savez_compressed(
-            os.path.join(out_dir, rel_path),
-            band_power=feats["band_power"].astype(np.float32),
-            relation=feats["relation"].astype(np.float32),
-            coupling_matrix=feats["coupling_matrix"].astype(np.float32),
-        )
-
-        with open(os.path.join(feat_dir, sample.sample_id + ".json"), "w", encoding="utf-8") as fh:
-            json.dump({
-                "schema_version": "1.0",
-                "sample_id": sample.sample_id,
-                "subject_id": sample.subject_id,
-                "dataset": sample.dataset,
-                "modality": modality,
-                "n_subbands": int(cfg.n_subbands),
-                "band_edges": [[float(lo), float(hi)] for lo, hi in feats["bands"]],
-                "band_order": "low-to-high",
-                "sr_hz": float(fs),
-                "coupling": feats["measures"],
-                "relation_dim": int(feats["relation"].size),
-                "band_power_dim": int(feats["band_power"].size),
-                "valid_fraction": float(np.mean(valid)),
-            }, fh, ensure_ascii=False)
-
-        manifest_rows.append({
-            "sample_id": sample.sample_id,
-            "subject_id": sample.subject_id,
-            "dataset": sample.dataset,
-            "label": int(sample.label),
-            "valid_fraction": float(np.mean(valid)),
-            "feature_file": rel_path.replace("\\", "/"),
-        })
-
-        if matrix_acc is None:
-            matrix_acc = feats["coupling_matrix"].copy()
-        else:
-            matrix_acc = matrix_acc + np.nan_to_num(feats["coupling_matrix"])
-        n_seen += 1
-
-    if not manifest_rows:
-        raise ValueError("没有提取到任何特征，请检查 processed_root / modality / dataset")
-
-    matrix_mean = matrix_acc / n_seen
-    modules = discover_modules(matrix_mean, cfg.n_modules).tolist()
-
-    with open(os.path.join(out_dir, "feature_meta.json"), "w", encoding="utf-8") as fh:
-        json.dump({
-            "schema_version": "1.0",
-            "n_subbands": int(cfg.n_subbands),
-            "coupling": parse_coupling(cfg.coupling),
-            "n_samples": n_seen,
-            "modules": modules,
-        }, fh, ensure_ascii=False)
-
-    manifest_path = os.path.join(out_dir, "manifest.csv")
-    fieldnames = ["sample_id", "subject_id", "dataset", "label", "valid_fraction", "feature_file"]
-    with open(manifest_path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(manifest_rows)
-
-    print("[cfc_extractor] 完成: %d 个试次 -> %s" % (n_seen, manifest_path))
-    print("[cfc_extractor] 关系模块（谱聚类）:", modules)
-    return manifest_path
-
-
 if __name__ == "__main__":
-    import argparse
-
-    from config import Config
-
-    ap = argparse.ArgumentParser(description="跨频带耦合特征提取（按 v1.0 读取 processed/v1.0）")
-    ap.add_argument("--processed_root", required=True)
-    ap.add_argument("--modality", default="audio", choices=["audio", "eeg", "ecg", "rppg"])
-    ap.add_argument("--dataset", default=None)
-    ap.add_argument("--out_dir", default="features")
-    ap.add_argument("--coupling", default="AAC", help="AAC / PAC / PPC / COH，或逗号拼接")
-    ap.add_argument("--n_subbands", type=int, default=8)
-    ap.add_argument("--f_min", type=float, default=20.0)
-    ap.add_argument("--config", default=None)
-    args = ap.parse_args()
-
-    cfg = Config.from_json(args.config) if args.config else Config()
-    cfg._d["coupling"] = args.coupling
-    cfg._d["n_subbands"] = args.n_subbands
-    cfg._d["f_min"] = args.f_min
-    process_directory(args.processed_root, args.modality, args.out_dir, cfg, dataset=args.dataset)
+    rng = np.random.RandomState(0)
+    t = np.linspace(0.0, 1.0, 1000, endpoint=False)
+    a = 0.5 + 0.3 * np.sin(2 * np.pi * 3.0 * t)
+    b = 0.5 + 0.3 * np.sin(2 * np.pi * 3.0 * t + 0.2)
+    print("AAC(同步):", calculate_AAC(a, b))
+    phase = np.linspace(-np.pi, np.pi, 1000)
+    amp = np.abs(np.sin(phase))
+    print("PAC(锁相):", calculate_PAC(phase, amp))

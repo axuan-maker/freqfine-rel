@@ -38,8 +38,13 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
     manifest = []
+    skipped = []
     for s in iter_audio(args.root, args.dataset, args.protocol, args.role):
-        feats = extract_sample_features(s["signal"], s["sr_hz"], cfg)
+        try:
+            feats = extract_sample_features(s["signal"], s["sr_hz"], cfg)
+        except Exception as exc:  # noqa: BLE001
+            skipped.append({"sample_id": s["sample_id"], "reason": str(exc)})
+            continue
         stem = s["sample_id"]
         np.savez_compressed(
             os.path.join(args.out_dir, stem + ".npz"),
@@ -61,13 +66,22 @@ def main():
             "feature_file": stem + ".npz",
         })
 
+    if not manifest:
+        raise RuntimeError("该角色没有成功提取任何样本，请检查数据与参数")
+
     with open(os.path.join(args.out_dir, "manifest.csv"), "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(manifest[0].keys()))
         writer.writeheader()
         writer.writerows(manifest)
 
-    print("[extract_delivery] %s/%s/%s: %d 个样本 -> %s"
-          % (args.dataset, args.protocol, args.role, len(manifest), args.out_dir))
+    if skipped:
+        with open(os.path.join(args.out_dir, "skipped.csv"), "w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=["sample_id", "reason"])
+            writer.writeheader()
+            writer.writerows(skipped)
+
+    print("[extract_delivery] %s/%s/%s: %d 成功, %d 跳过 -> %s"
+          % (args.dataset, args.protocol, args.role, len(manifest), len(skipped), args.out_dir))
 
 
 if __name__ == "__main__":
