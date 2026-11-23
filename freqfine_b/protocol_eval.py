@@ -160,12 +160,20 @@ def run_h1b(features_root, protocols, out_dir, cfg):
         c: {"mean_test_auc": float(np.mean(acc[c])), "std_test_auc": float(np.std(acc[c]))}
         for c in CONDITIONS
     }
-    delta = summary["relation"]["mean_test_auc"] - summary["subject_baseline_norm"]["mean_test_auc"]
-    verdict = "GO" if delta >= float(cfg.go_nogo_margin) else "NO-GO"
+    rel = summary["relation"]["mean_test_auc"]
+    fb = summary["full_band"]["mean_test_auc"]
+    sbn = summary["subject_baseline_norm"]["mean_test_auc"]
+    margin = float(cfg.go_nogo_margin)
+    subject_level = str(getattr(cfg, "label_level", "subject")).lower() == "subject"
+    delta_floor = rel - fb
+    verdict = "GO" if delta_floor >= margin else "NO-GO"
     report = {
         "verdict": verdict,
-        "margin": float(cfg.go_nogo_margin),
-        "delta_vs_subject_baseline_norm": delta,
+        "margin": margin,
+        "go_nogo_baseline": "full_band",
+        "delta_vs_full_band": delta_floor,
+        "subject_baseline_norm_applicable": not subject_level,
+        "delta_vs_subject_baseline_norm": rel - sbn,
         "summary": summary,
         "folds": fold_reports,
     }
@@ -176,7 +184,9 @@ def run_h1b(features_root, protocols, out_dir, cfg):
     print("H1b 汇总（%d 折 test AUC）" % len(protocols))
     for c in CONDITIONS:
         print("  %-24s %.4f ± %.4f" % (c, summary[c]["mean_test_auc"], summary[c]["std_test_auc"]))
-    print("  关系 vs Subject-Baseline-Norm 增量: %+.4f (阈值 %.4f)" % (delta, cfg.go_nogo_margin))
+    print("  关系 vs full_band 增量: %+.4f (go/no-go 阈值 %.4f)" % (delta_floor, margin))
+    print("  关系 vs subject_baseline_norm: %+.4f%s"
+          % (rel - sbn, "（被试级标签，仅诊断，不参与判定）" if subject_level else ""))
     print("  判定: %s" % verdict)
     print("=" * 66)
     return report
@@ -231,6 +241,7 @@ if __name__ == "__main__":
         p.add_argument("--model", default="svm", choices=["svm", "rf"])
         p.add_argument("--weighting", default="none", choices=["none", "hsic", "mi"])
         p.add_argument("--pos_class", type=int, default=1)
+        p.add_argument("--label_level", default="subject", choices=["subject", "trial"])
         p.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
         p.add_argument("--go_nogo_margin", type=float, default=0.015)
 
@@ -239,6 +250,7 @@ if __name__ == "__main__":
     cfg._d["model"] = args.model
     cfg._d["weighting"] = args.weighting
     cfg._d["pos_class"] = args.pos_class
+    cfg._d["label_level"] = args.label_level
     cfg._d["seeds"] = list(args.seeds)
     cfg._d["go_nogo_margin"] = args.go_nogo_margin
 

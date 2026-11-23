@@ -20,6 +20,7 @@ _DEFAULTS = {
     "seeds": [0, 1, 2],
     "random_subband_seeds": [0, 1, 2, 3, 4],
     "pos_class": 1,
+    "label_level": "subject",
     "go_nogo_margin": 0.015,
     "n_modules": None,
 }

@@ -42,4 +42,5 @@ python dl_baseline.py --features_dir /cloud/features/seu_fold0_v1/train
 
 `extract_delivery.py` 对单个失败样本会跳过并写入 `skipped.csv`，不中断整折提取。
 评估口径：train 拟合、validation 选参/参考、test 报告，多折取均值±标准差；
-H1b 的 go/no-go 看关系向量相对 subject_baseline_norm 的 test AUC 增量（默认阈值 1.5%）。
+H1b 的 go/no-go 看关系向量相对 full_band 的 test AUC 增量（默认阈值 1.5%）；
+subject_baseline_norm 在被试级标签（SEUMLD）下仅作诊断、不参与判定（原因见报告字段）。
