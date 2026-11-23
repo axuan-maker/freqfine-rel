@@ -165,13 +165,18 @@ def run_h1b(features_root, protocols, out_dir, cfg):
     sbn = summary["subject_baseline_norm"]["mean_test_auc"]
     margin = float(cfg.go_nogo_margin)
     subject_level = str(getattr(cfg, "label_level", "subject")).lower() == "subject"
-    delta_floor = rel - fb
+    if subject_level:
+        floor_baseline = "full_band"
+        delta_floor = rel - fb
+    else:
+        floor_baseline = "subject_baseline_norm"
+        delta_floor = rel - sbn
     verdict = "GO" if delta_floor >= margin else "NO-GO"
     report = {
         "verdict": verdict,
         "margin": margin,
-        "go_nogo_baseline": "full_band",
-        "delta_vs_full_band": delta_floor,
+        "go_nogo_baseline": floor_baseline,
+        "delta_vs_full_band": rel - fb,
         "subject_baseline_norm_applicable": not subject_level,
         "delta_vs_subject_baseline_norm": rel - sbn,
         "model": cfg.model,
@@ -188,9 +193,9 @@ def run_h1b(features_root, protocols, out_dir, cfg):
     print("H1b 汇总（%d 折 test AUC）" % len(protocols))
     for c in CONDITIONS:
         print("  %-24s %.4f ± %.4f" % (c, summary[c]["mean_test_auc"], summary[c]["std_test_auc"]))
-    print("  关系 vs full_band 增量: %+.4f (go/no-go 阈值 %.4f)" % (delta_floor, margin))
+    print("  关系 vs %s 增量: %+.4f (go/no-go 阈值 %.4f)" % (floor_baseline, delta_floor, margin))
     print("  关系 vs subject_baseline_norm: %+.4f%s"
-          % (rel - sbn, "（被试级标签，仅诊断，不参与判定）" if subject_level else ""))
+          % (rel - sbn, "（被试级标签，仅诊断）" if subject_level else "（试次级标签，参与判定）"))
     print("  判定: %s" % verdict)
     print("=" * 66)
     return report
