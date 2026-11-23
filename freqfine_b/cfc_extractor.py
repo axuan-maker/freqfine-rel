@@ -71,7 +71,7 @@ def subband_decompose(
     method: str = "filterbank",
 ) -> np.ndarray:
     """将一维信号分解为 K 个子带，返回 (K, n_samples)。"""
-    from scipy.signal import butter, filtfilt
+    from scipy.signal import butter, sosfiltfilt
 
     x = _as_float_1d(signal, "signal")
     fs = float(fs)
@@ -93,8 +93,8 @@ def subband_decompose(
 
     bands = []
     for lo, hi in band_edges(f_min, f_max, n_subbands):
-        b, a = butter(order, [lo, hi], btype="bandpass", fs=fs)
-        bands.append(filtfilt(b, a, x))
+        sos = butter(order, [lo, hi], btype="bandpass", fs=fs, output="sos")
+        bands.append(sosfiltfilt(sos, x))
     return np.stack(bands, axis=0)
 
 
@@ -282,7 +282,10 @@ def extract_sample_features(signal, fs: float, cfg) -> dict:
     relation = rel_concats / n_ch
     if cfg.add_band_power:
         relation = np.concatenate([relation, band_power])
-    mean_matrix = np.nanmean(np.stack(matrices), axis=0)
+    stacked = np.stack(matrices)
+    for mat in stacked:
+        np.fill_diagonal(mat, 0.0)
+    mean_matrix = np.mean(stacked, axis=0)
     return {
         "band_power": band_power.astype(np.float64),
         "relation": relation.astype(np.float64),
