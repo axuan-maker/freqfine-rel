@@ -18,6 +18,7 @@ import numpy as np
 __all__ = [
     "calculate_AAC",
     "calculate_PAC",
+    "calculate_PAC_zscore",
     "calculate_PPC",
     "calculate_coherence",
     "subband_decompose",
@@ -143,23 +144,8 @@ def calculate_AAC(envelope_1, envelope_2) -> float:
     return float(np.clip(cov / denom, -1.0, 1.0))
 
 
-def calculate_PAC(phase_low, amp_high, n_bins: int = 18) -> float:
-    phase = _as_float_1d(phase_low, "phase_low")
-    amp = _as_float_1d(amp_high, "amp_high")
-    if phase.size != amp.size:
-        raise ValueError("相位与幅度长度不一致")
-    n_bins = int(n_bins)
-    if n_bins < 2:
-        raise ValueError("n_bins 必须 >= 2")
-    if phase.size < n_bins:
-        raise ValueError("样本数(%d)必须 >= n_bins(%d)" % (phase.size, n_bins))
-    if np.any(amp < 0.0):
-        raise ValueError("amp_high 应为非负包络，但出现了负值")
-
-    total_amp = float(amp.sum())
-    if total_amp <= _EPS:
-        raise ValueError("amp_high 全为 0，无法归一化")
-
+def _tort_mi(phase, amp, n_bins):
+    """Tort 调制指数：P(n) 为高频幅度在低频相位各 bin 的平均分布。"""
     edges = np.linspace(-np.pi, np.pi, n_bins + 1)
     bin_idx = np.clip(np.digitize(phase, edges) - 1, 0, n_bins - 1)
     P = np.zeros(n_bins, dtype=np.float64)
@@ -176,6 +162,58 @@ def calculate_PAC(phase_low, amp_high, n_bins: int = 18) -> float:
     return float(np.clip((log_n - H) / log_n, 0.0, 1.0))
 
 
+def calculate_PAC(phase_low, amp_high, n_bins: int = 18) -> float:
+    phase = _as_float_1d(phase_low, "phase_low")
+    amp = _as_float_1d(amp_high, "amp_high")
+    if phase.size != amp.size:
+        raise ValueError("相位与幅度长度不一致")
+    n_bins = int(n_bins)
+    if n_bins < 2:
+        raise ValueError("n_bins 必须 >= 2")
+    if phase.size < n_bins:
+        raise ValueError("样本数(%d)必须 >= n_bins(%d)" % (phase.size, n_bins))
+    if np.any(amp < 0.0):
+        raise ValueError("amp_high 应为非负包络，但出现了负值")
+    if float(amp.sum()) <= _EPS:
+        raise ValueError("amp_high 全为 0，无法归一化")
+    return _tort_mi(phase, amp, n_bins)
+
+
+def calculate_PAC_zscore(
+    phase_low,
+    amp_high,
+    n_bins: int = 18,
+    n_surrogates: int = 200,
+    seed: int = 0,
+) -> float:
+    """代理归一化 PAC：相位随机循环平移生成零分布，返回 z-score。
+
+    用于控制非正弦相位波形与幅度偏斜造成的伪耦合（Tort 原论文做法）。
+    """
+    phase = _as_float_1d(phase_low, "phase_low")
+    amp = _as_float_1d(amp_high, "amp_high")
+    if phase.size != amp.size:
+        raise ValueError("相位与幅度长度不一致")
+    n_bins = int(n_bins)
+    if n_bins < 2 or phase.size < n_bins:
+        raise ValueError("n_bins 或样本数非法")
+    if np.any(amp < 0.0):
+        raise ValueError("amp_high 应为非负包络，但出现了负值")
+
+    obs = _tort_mi(phase, amp, n_bins)
+    rng = np.random.RandomState(seed)
+    n = phase.size
+    nulls = []
+    for _ in range(int(n_surrogates)):
+        shift = int(rng.randint(1, n))
+        nulls.append(_tort_mi(np.roll(phase, shift), amp, n_bins))
+    nulls = np.asarray(nulls, dtype=np.float64)
+    sd = float(nulls.std())
+    if sd <= _EPS:
+        return 0.0
+    return float((obs - float(nulls.mean())) / sd)
+
+
 def calculate_PPC(phase_i, phase_j) -> float:
     pi = _as_float_1d(phase_i, "phase_i")
     pj = _as_float_1d(phase_j, "phase_j")
@@ -186,13 +224,18 @@ def calculate_PPC(phase_i, phase_j) -> float:
     return float(np.abs(np.mean(np.exp(1j * (pi - pj)))))
 
 
-def calculate_coherence(x, y, fs: float, nperseg: int = 256) -> float:
+def calculate_coherence(envelope_x, envelope_y, fs: float, nperseg: int = 256) -> float:
+    """两子带包络之间的幅度平方相干（AAC 的频域版本）。
+
+    传入各子带的瞬时幅度包络，而非两个互不重叠子带的原始时域信号——
+    后者在频域上无交叠，直接求相干会恒等于 0。
+    """
     from scipy.signal import coherence
 
-    x = _as_float_1d(x, "x")
-    y = _as_float_1d(y, "y")
+    x = _as_float_1d(envelope_x, "envelope_x")
+    y = _as_float_1d(envelope_y, "envelope_y")
     if x.size != y.size:
-        raise ValueError("信号长度不一致")
+        raise ValueError("包络长度不一致")
     _, cxy = coherence(x, y, fs=float(fs), nperseg=int(nperseg))
     return float(np.nanmean(cxy))
 
@@ -209,7 +252,7 @@ def _matrix_from(measure, subbands, amps, phases, fs, nperseg, n_bins) -> np.nda
             elif measure == "PPC":
                 mat[i, j] = calculate_PPC(phases[i], phases[j])
             elif measure == "COH":
-                mat[i, j] = calculate_coherence(subbands[i], subbands[j], fs, nperseg)
+                mat[i, j] = calculate_coherence(amps[i], amps[j], fs, nperseg)
     return mat
 
 

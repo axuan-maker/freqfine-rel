@@ -44,12 +44,13 @@ def evaluate_condition(bundle, y, subjects, roles, builder, cfg):
     test_scores = np.full((len(seeds), te.size), np.nan)
     val_scores = np.full((len(seeds), va.size), np.nan)
     for si, seed in enumerate(seeds):
-        rng = np.random.RandomState(seed)
-        Xtr, Xte = builder(bundle, tr, te, y[tr], subjects[tr], rng, cfg)
+        rng_te = np.random.RandomState(seed)
+        rng_va = np.random.RandomState(seed)
+        Xtr, Xte = builder(bundle, tr, te, y[tr], subjects[tr], rng_te, cfg)
         model = make_model(cfg.model, random_state=seed).fit(Xtr, y[tr])
         test_scores[si] = model.predict_proba(Xte)[:, _proba_col(model, cfg.pos_class)]
 
-        Xtr2, Xva = builder(bundle, tr, va, y[tr], subjects[tr], rng, cfg)
+        Xtr2, Xva = builder(bundle, tr, va, y[tr], subjects[tr], rng_va, cfg)
         model2 = make_model(cfg.model, random_state=seed).fit(Xtr2, y[tr])
         val_scores[si] = model2.predict_proba(Xva)[:, _proba_col(model2, cfg.pos_class)]
     return {
@@ -193,7 +194,9 @@ def run_h1a(features_root, protocols, out_dir, cfg):
     order = [int(k) for k in sorted(mean_aucs, key=mean_aucs.get, reverse=True)]
     top, med = order[0], order[len(order) // 2]
     delta = mean_aucs[top] - mean_aucs[med]
-    supported = delta > 0 and bool(np.mean([r["delong_p"] for r in fold_reports if np.isfinite(r["delong_p"])]) < 0.05) if fold_reports else False
+    ps = [r["delong_p"] for r in fold_reports if np.isfinite(r["delong_p"])]
+    mean_p = float(np.mean(ps)) if ps else np.nan
+    supported = bool(delta > 0 and np.isfinite(mean_p) and mean_p < 0.05)
     report = {
         "verdict": "H1a_supported" if supported else "H1a_weak",
         "top_subband": top,
